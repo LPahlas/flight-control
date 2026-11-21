@@ -1,10 +1,64 @@
-# Flight Control: the web site and the traffic engine share one SQLite file.
+# The reference airline is the default service. The grader dashboard is optional.
 services:
+  db:
+    image: postgres:17-alpine
+    environment:
+      POSTGRES_DB: airline
+      POSTGRES_USER: airline
+      POSTGRES_PASSWORD: ${AIRLINE_DB_PASSWORD:-airline_dev_password}
+    command:
+      - postgres
+      - -c
+      - max_connections=100
+      - -c
+      - shared_buffers=128MB
+      - -c
+      - synchronous_commit=on
+      - -c
+      - timezone=UTC
+    volumes:
+      - airlinedata:/var/lib/postgresql/data
+    healthcheck:
+      test: ["CMD-SHELL", "pg_isready -U airline -d airline"]
+      interval: 3s
+      timeout: 3s
+      retries: 20
+    restart: unless-stopped
+
+  airline:
+    build: .
+    command: ["uvicorn", "airline.app:app", "--host", "0.0.0.0", "--port", "8080"]
+    environment:
+      AIRLINE_DB_HOST: db
+      AIRLINE_DB_PORT: 5432
+      AIRLINE_DB_NAME: airline
+      AIRLINE_DB_USER: airline
+      AIRLINE_DB_PASSWORD: ${AIRLINE_DB_PASSWORD:-airline_dev_password}
+      AIRLINE_DB_POOL_MIN: ${AIRLINE_DB_POOL_MIN:-4}
+      AIRLINE_DB_POOL_MAX: ${AIRLINE_DB_POOL_MAX:-32}
+    depends_on:
+      db:
+        condition: service_healthy
+    ports:
+      - "127.0.0.1:${AIRLINE_PORT:-8080}:8080"
+    healthcheck:
+      test:
+        - CMD
+        - python
+        - -c
+        - "import urllib.request; urllib.request.urlopen('http://127.0.0.1:8080/health', timeout=2)"
+      interval: 5s
+      timeout: 3s
+      retries: 12
+      start_period: 40s
+    restart: unless-stopped
+
   web:
+    profiles: ["dashboard"]
     build: .
     command: ["flightcontrol", "web", "--host", "0.0.0.0", "--port", "8000"]
     environment:
-      FC_ADMIN_PASSWORD: ${FC_ADMIN_PASSWORD:?set FC_ADMIN_PASSWORD in .env}
+      FC_ADMIN_PASSWORD: ${FC_ADMIN_PASSWORD:-}
       FC_PUBLIC_URL: ${FC_PUBLIC_URL:-http://localhost:8000}
       FC_ALLOWED_HOST_SUFFIXES: ${FC_ALLOWED_HOST_SUFFIXES:-}
       FC_DEV: ${FC_DEV:-0}
@@ -12,6 +66,7 @@ services:
     ports: ["127.0.0.1:${FC_PORT:-8000}:8000"]
     restart: unless-stopped
   engine:
+    profiles: ["dashboard"]
     build: .
     command: ["flightcontrol", "engine"]
     environment:
@@ -22,4 +77,5 @@ services:
     volumes: [fcdata:/data]
     restart: unless-stopped
 volumes:
+  airlinedata:
   fcdata:

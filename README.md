@@ -43,6 +43,22 @@ uv run flightcontrol test --url http://localhost:8080 --test 1 --verbose
 | `src/flightcontrol/grading.py` | tests 1 to 5 |
 | `src/flightcontrol/engine.py` | the process that sends all traffic |
 | `src/flightcontrol/web.py` | the web site |
+| `airline/` | the PostgreSQL-backed reference airline API; see [airline/README.md](airline/README.md) |
+
+## Run the reference airline
+
+The reference airline and Flight Control are separate services in the same
+repository and Compose stack. From the repository root, run:
+
+```
+docker compose up --build
+```
+
+The airline API listens on `http://localhost:8080`; it requires no API key.
+The first startup loads the 2027 catalog into PostgreSQL and can take a little
+while. PostgreSQL data is kept in a named volume. Stop the services with
+`docker compose down`; remove the data only with `docker compose down --volumes`.
+See [airline/README.md](airline/README.md) for the API design and test details.
 
 ## Optional instructor dashboard
 
@@ -54,17 +70,18 @@ terminals from the repository root. Set `FC_DEV=1` in both terminals and set
 your airline's localhost URL on the team page, and approve it in the dashboard.
 Use `FC_DEV=1` only for a trusted local dashboard.
 
-For a hosted dashboard, Docker Compose can run the web and engine processes
-with a shared SQLite file. Copy `.env.example` to `.env`, set
-`FC_ADMIN_PASSWORD`, and configure `FC_PUBLIC_URL` and
-`FC_ALLOWED_HOST_SUFFIXES` for your deployment. The domain list is empty
-by default.
+For the local dashboard in Compose, copy `.env.example` to `.env`, set
+`FC_ADMIN_PASSWORD`, and set `FC_DEV=1`. Open the team page and set the airline
+URL to `http://airline:8080`, then approve that URL. Use `FC_DEV=1` only for a
+trusted local dashboard.
 
 ```bash
-docker compose up -d --build
+docker compose --profile dashboard up -d --build
 ```
 
-The container publishes the dashboard at `127.0.0.1:8000`. Serve it over
-HTTPS if you make it public. For hosted runs, Flight Control only calls an
-instructor-approved HTTPS URL on an explicitly allowed domain that resolves
-to a public address. Flight Control never follows redirects.
+The dashboard publishes at `127.0.0.1:8000`; the airline API remains at
+`127.0.0.1:8080`. For a hosted dashboard, set `FC_DEV=0`, configure
+`FC_PUBLIC_URL` and `FC_ALLOWED_HOST_SUFFIXES`, and serve it over HTTPS.
+Hosted Flight Control runs only call an instructor-approved HTTPS URL on an
+explicitly allowed domain that resolves to a public address. Flight Control
+never follows redirects.
