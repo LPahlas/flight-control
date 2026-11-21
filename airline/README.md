@@ -25,13 +25,27 @@ Check that it is responding:
 curl.exe http://localhost:8080/health
 ```
 
-Open the browser interface at **http://localhost:8080/ui/**. The Search and
-book tab supports finding itineraries, creating holds, submitting bookings,
-and entering passenger names, payment tokens, and idempotency keys. Manage
-bookings supports lookup and cancellation. The Instructor / admin tab exposes
-health, statistics, flight seat counts, booking export, reset, and restart.
-The interface calls the same HTTP API as other clients; no separate account or
-API key is required.
+Open the end-user website at **http://localhost:8080/ui/**. It has no account
+login or API setup; all booking actions run through the airline's normal API.
+
+### Using the traveler website
+
+1. On **Book a trip**, choose where you are flying from, where you are flying
+   to, a travel date in `YYYY-MM-DD` format, and the number of travelers.
+2. Select **Search flights**. Choose one of the listed options. The page shows
+   whether it is nonstop or has one or more stops, the price per traveler,
+   and seats still available.
+3. Select **Hold these seats**. A successful hold lasts 60 seconds. The hold
+   reserves seats but does not complete the purchase.
+4. Enter one passenger name per line, choose a demo payment, and select
+   **Confirm booking**. Use **Use successful demo payment** for a normal
+   booking. Use **Test a declined payment** to verify the declined-payment
+   message.
+5. Keep the booking reference displayed after confirmation.
+
+To find or cancel a trip, open **My booking**, enter the booking reference,
+and select **View booking** or **Cancel this booking**. Cancellation returns
+the seats and is safe to repeat.
 
 Run a grader test from the repository root in another terminal. This uses the
 CLI in the Docker image, so `uv` does not need to be installed on your host:

@@ -11,6 +11,17 @@ from flightcontrol.catalog import AIRPORT_BY_CODE
 
 API_BASE_URL = os.environ.get("AIRLINE_API_BASE_URL", "http://127.0.0.1:8080").rstrip("/")
 
+USER_CSS = """
+:root { --body-background-fill: #f4f1ea; --block-background-fill: #fffdf8; --block-border-color: #ddd5c6; --body-text-color: #1d232b; --color-accent: #c76a00; }
+.gradio-container { max-width: 1120px !important; margin: auto; font-family: "IBM Plex Sans", system-ui, sans-serif; background: #f4f1ea; }
+.gradio-container .prose { color: #1d232b; }
+.block { border-radius: 12px !important; }
+label span, .wrap label { color: #5d6672 !important; }
+button.primary { background: #c76a00 !important; border-color: #c76a00 !important; color: #1b1203 !important; }
+button.stop { background: #fffdf8 !important; border: 1px solid #b3261e !important; color: #b3261e !important; }
+footer { display: none !important; }
+"""
+
 
 async def _api_request(
     method: str,
@@ -46,11 +57,14 @@ async def _search(
     destination: str,
     travel_date: str,
     passengers: int | float,
-) -> tuple[dict, str]:
+) -> tuple[str, list[str], dict[str, str]]:
     try:
         party_size = _integer(passengers, "Passengers", 1, 9)
     except ValueError as exc:
-        return {"error": str(exc)}, ""
+        return f"Please check your trip details: {exc}", [], {}
+    if origin == destination:
+        return "Choose two different airports.", [], {}
+
     response = await _api_request(
         "GET",
         "/search",
@@ -61,247 +75,265 @@ async def _search(
             "passengers": party_size,
         },
     )
+    if response["status_code"] != 200:
+        body = response.get("body", {})
+        message = body.get("detail") or body.get("error") or "We could not search for flights."
+        return str(message), [], {}
+
     itineraries = response.get("body", {}).get("itineraries", [])
-    first_id = (
-        itineraries[0].get("itinerary_id")
-        if isinstance(itineraries, list) and itineraries and isinstance(itineraries[0], dict)
-        else ""
-    )
-    return response, first_id or ""
+    if not itineraries:
+        return "No flights are available for that trip.", [], {}
+
+    choices: list[str] = []
+    itinerary_map: dict[str, str] = {}
+    for item in itineraries:
+        stops = "Nonstop" if item["stops"] == 0 else f"{item['stops']} stop"
+        label = (
+            f"{stops}  |  "
+            f"${item['price_cents'] / 100:.2f} per traveler  |  "
+            f"{item['seats_available']} seats left"
+        )
+        choices.append(label)
+        itinerary_map[label] = item["itinerary_id"]
+    return f"Found {len(choices)} option{'s' if len(choices) != 1 else ''}.", choices, itinerary_map
 
 
-async def _create_hold(itinerary_id: str, passengers: int | float) -> tuple[dict, str]:
+async def _create_hold(itinerary_id: str, passengers: int | float) -> tuple[str, str]:
     try:
         party_size = _integer(passengers, "Passengers", 1, 9)
     except ValueError as exc:
-        return {"error": str(exc)}, ""
+        return f"Please check your traveler count: {exc}", ""
+    if not itinerary_id:
+        return "Search for a trip and choose a flight first.", ""
+
     response = await _api_request(
         "POST",
         "/holds",
         payload={"itinerary_id": itinerary_id, "passengers": party_size},
     )
     body = response.get("body", {})
-    hold_id = body.get("hold_id", "") if response.get("status_code") == 201 else ""
-    return response, hold_id
+    if response.get("status_code") != 201:
+        message = body.get("detail") or body.get("error") or "Those seats could not be held."
+        if body.get("error") == "sold_out":
+            message = "That option just sold out. Please search again."
+        return str(message), ""
+
+    hold_id = body["hold_id"]
+    return (
+        f"Seats held successfully for 60 seconds. "
+        f"Total: ${body['total_cents'] / 100:.2f}. "
+        f"Continue to passenger details now.",
+        hold_id,
+    )
+
+
+async def _hold_selected(
+    label: str,
+    itinerary_map: dict[str, str],
+    passengers: int | float,
+) -> tuple[str, str]:
+    return await _create_hold(itinerary_map.get(label or "", ""), passengers)
 
 
 async def _create_booking(
-    hold_id: str,
     passenger_names: str,
-    payment_token: str,
-    idempotency_key: str,
-) -> tuple[dict, str]:
+    payment_choice: str,
+    hold_id: str,
+) -> tuple[str, str]:
+    if not hold_id:
+        return "Hold seats before completing the booking.", ""
+
     names = [
         {"name": line.strip()}
         for line in passenger_names.splitlines()
         if line.strip()
     ]
+    if not names:
+        return "Enter at least one passenger name.", ""
+
     response = await _api_request(
         "POST",
         "/bookings",
         payload={
             "hold_id": hold_id,
             "passengers": names,
-            "payment_token": payment_token,
-            "idempotency_key": idempotency_key,
+            "payment_token": (
+                "tok_ok_demo" if payment_choice == "success" else "tok_decline_demo"
+            ),
+            "idempotency_key": uuid.uuid4().hex,
         },
     )
     body = response.get("body", {})
-    booking_id = (
-        body.get("booking_id", "") if response.get("status_code") in (200, 201) else ""
-    )
-    return response, booking_id
+    if response.get("status_code") not in (200, 201):
+        message = body.get("detail") or body.get("error") or "The booking could not be completed."
+        if body.get("error") == "payment_declined":
+            message = "The demo payment was declined. Try the successful demo payment."
+        elif body.get("error") == "hold_expired":
+            message = "The seat hold has expired. Search and hold the seats again."
+        elif body.get("error") == "passenger_mismatch":
+            message = "Enter one passenger name for each seat you held."
+        return str(message), ""
 
-
-async def _get_booking(booking_id: str) -> dict:
-    return await _api_request("GET", f"/bookings/{quote(booking_id, safe='')}")
-
-
-async def _cancel_booking(booking_id: str) -> dict:
-    return await _api_request("DELETE", f"/bookings/{quote(booking_id, safe='')}")
-
-
-async def _health() -> dict:
-    return await _api_request("GET", "/health")
-
-
-async def _stats() -> dict:
-    return await _api_request("GET", "/admin/stats")
-
-
-async def _flight_counts(flight_id: str) -> dict:
-    return await _api_request(
-        "GET", f"/admin/flights/{quote(flight_id, safe='')}"
+    booking_id = body["booking_id"]
+    return (
+        f"Booking confirmed for {len(names)} traveler{'s' if len(names) != 1 else ''}. "
+        f"Total: ${body['total_cents'] / 100:.2f}. "
+        f"Keep your booking reference: {booking_id}",
+        booking_id,
     )
 
 
-async def _booking_export(offset: int | float, limit: int | float) -> dict:
-    try:
-        page_offset = _integer(offset, "Offset", 0, 2_000_000)
-        page_limit = _integer(limit, "Limit", 1, 500)
-    except ValueError as exc:
-        return {"error": str(exc)}
-    return await _api_request(
-        "GET",
-        "/admin/bookings",
-        params={"offset": page_offset, "limit": page_limit},
+async def _get_booking(booking_id: str) -> str:
+    if not booking_id.strip():
+        return "Enter your booking reference."
+    response = await _api_request("GET", f"/bookings/{quote(booking_id.strip(), safe='')}")
+    if response["status_code"] == 404:
+        return "We could not find that booking reference."
+    body = response["body"]
+    names = ", ".join(passenger["name"] for passenger in body["passengers"])
+    status = "Confirmed" if body["status"] == "confirmed" else "Cancelled"
+    return (
+        f"**{status} booking**\n\n"
+        f"- Reference: `{body['booking_id']}`\n"
+        f"- Travelers: {names}\n"
+        f"- Flights: {' → '.join(body['flight_ids'])}\n"
+        f"- Total: ${body['total_cents'] / 100:.2f}"
     )
 
 
-async def _reset(confirm: bool) -> dict:
-    if not confirm:
-        return {"error": "Confirm that all bookings and holds should be deleted."}
-    return await _api_request("POST", "/admin/reset")
-
-
-async def _restart(confirm: bool) -> dict:
-    if not confirm:
-        return {"error": "Confirm that the airline service should restart."}
-    return await _api_request("POST", "/admin/restart")
+async def _cancel_booking(booking_id: str) -> str:
+    if not booking_id.strip():
+        return "Enter your booking reference."
+    response = await _api_request(
+        "DELETE", f"/bookings/{quote(booking_id.strip(), safe='')}"
+    )
+    if response["status_code"] == 404:
+        return "We could not find that booking reference."
+    body = response["body"]
+    return (
+        f"Booking {body['booking_id']} is cancelled. "
+        f"${body['total_cents'] / 100:.2f} would be refunded."
+    )
 
 
 def build_ui() -> gr.Blocks:
-    airport_codes = sorted(AIRPORT_BY_CODE)
-    with gr.Blocks(title="Airline Reservation") as demo:
+    airport_choices = [
+        (f"{airport.city} ({airport.code})", airport.code)
+        for airport in AIRPORT_BY_CODE.values()
+    ]
+    with gr.Blocks(title="Northwind Air") as demo:
         gr.Markdown(
-            "# Airline Reservation\n"
-            "Use the airline API through a browser. Search, hold, book, look up, "
-            "and cancel travel; the instructor tab exposes the contract's admin endpoints."
+            "# Northwind Air\n"
+            "### Find your next flight"
         )
+        hold_id = gr.State("")
+        booking_id = gr.State("")
+        itinerary_map = gr.State({})
 
-        with gr.Tab("Search and book"):
-            with gr.Row():
-                origin = gr.Dropdown(airport_codes, value="BOI", label="Origin")
-                destination = gr.Dropdown(airport_codes, value="JFK", label="Destination")
-                travel_date = gr.Textbox(
-                    value="2027-05-04",
-                    label="Departure date",
-                    placeholder="YYYY-MM-DD",
-                )
-                search_passengers = gr.Number(
-                    value=1, precision=0, minimum=1, maximum=9, label="Passengers"
-                )
-            search_button = gr.Button("Search flights", variant="primary")
-            search_result = gr.JSON(label="Search response")
+        with gr.Tab("Book a trip"):
+            with gr.Group():
+                with gr.Row():
+                    origin = gr.Dropdown(
+                        airport_choices,
+                        value="BOI",
+                        label="Flying from",
+                        interactive=True,
+                    )
+                    destination = gr.Dropdown(
+                        airport_choices,
+                        value="JFK",
+                        label="Flying to",
+                        interactive=True,
+                    )
+                with gr.Row():
+                    travel_date = gr.Textbox(
+                        value="2027-05-04",
+                        label="Travel date",
+                        placeholder="Use YYYY-MM-DD",
+                    )
+                    passengers = gr.Number(
+                        value=1,
+                        precision=0,
+                        minimum=1,
+                        maximum=9,
+                        label="Travelers",
+                    )
+                search_button = gr.Button("Search flights", variant="primary")
 
-            itinerary_id = gr.Textbox(
-                label="Itinerary ID",
-                placeholder="Select an ID from the search response or paste one",
+            search_message = gr.Markdown()
+            itinerary = gr.Dropdown(
+                choices=[],
+                label="Available flights",
+                interactive=True,
             )
-            with gr.Row():
-                hold_passengers = gr.Number(
-                    value=1, precision=0, minimum=1, maximum=9, label="Hold passengers"
-                )
-                hold_button = gr.Button("Hold seats")
-            hold_result = gr.JSON(label="Hold response")
-            hold_id_for_booking = gr.Textbox(label="Hold ID")
+            hold_button = gr.Button("Hold these seats")
+            hold_message = gr.Markdown()
 
-            gr.Markdown(
-                "Enter one passenger name per line. Payment tokens beginning with "
-                "`tok_ok_` succeed; `tok_decline_` simulates a declined payment."
-            )
+            gr.Markdown("#### Traveler and payment details")
             passenger_names = gr.Textbox(
-                label="Passenger names",
-                placeholder="Ada Park\nLee Park",
-                lines=4,
+                label="Traveler names",
+                placeholder="One name per line",
+                lines=3,
             )
-            with gr.Row():
-                payment_token = gr.Textbox(
-                    value="tok_ok_demo",
-                    label="Payment token",
-                )
-                idempotency_key = gr.Textbox(
-                    value=lambda: uuid.uuid4().hex,
-                    label="Idempotency key",
-                )
-                new_key_button = gr.Button("New key")
-            book_button = gr.Button("Book hold", variant="primary")
-            booking_result = gr.JSON(label="Booking response")
-            created_booking_id = gr.Textbox(label="Booking ID")
+            payment = gr.Radio(
+                choices=[
+                    ("Use successful demo payment", "success"),
+                    ("Test a declined payment", "decline"),
+                ],
+                value="success",
+                label="Payment",
+            )
+            book_button = gr.Button("Confirm booking", variant="primary")
+            booking_message = gr.Markdown()
+            booking_reference = gr.Textbox(
+                label="Your booking reference",
+                interactive=False,
+            )
 
             search_button.click(
                 _search,
-                inputs=[origin, destination, travel_date, search_passengers],
-                outputs=[search_result, itinerary_id],
+                inputs=[origin, destination, travel_date, passengers],
+                outputs=[search_message, itinerary, itinerary_map],
             )
             hold_button.click(
-                _create_hold,
-                inputs=[itinerary_id, hold_passengers],
-                outputs=[hold_result, hold_id_for_booking],
+                _hold_selected,
+                inputs=[itinerary, itinerary_map, passengers],
+                outputs=[hold_message, hold_id],
             )
             book_button.click(
                 _create_booking,
-                inputs=[
-                    hold_id_for_booking,
-                    passenger_names,
-                    payment_token,
-                    idempotency_key,
-                ],
-                outputs=[booking_result, created_booking_id],
+                inputs=[passenger_names, payment, hold_id],
+                outputs=[booking_message, booking_reference],
+            ).then(
+                lambda reference: reference,
+                inputs=booking_reference,
+                outputs=booking_id,
             )
-            new_key_button.click(lambda: uuid.uuid4().hex, outputs=idempotency_key)
 
-        with gr.Tab("Manage bookings"):
-            with gr.Row():
-                lookup_id = gr.Textbox(label="Booking ID to look up")
-                lookup_button = gr.Button("Get booking")
-            lookup_result = gr.JSON(label="Booking")
-            lookup_button.click(_get_booking, inputs=lookup_id, outputs=lookup_result)
-
-            with gr.Row():
-                cancel_id = gr.Textbox(label="Booking ID to cancel")
-                cancel_button = gr.Button("Cancel booking", variant="stop")
-            cancel_result = gr.JSON(label="Cancellation response")
-            cancel_button.click(_cancel_booking, inputs=cancel_id, outputs=cancel_result)
-
-        with gr.Tab("Instructor / admin"):
+        with gr.Tab("My booking"):
             gr.Markdown(
-                "These actions call the contract's `/admin/*` API endpoints. "
-                "Reset deletes all bookings and holds; restart stops and restarts the service."
+                "Enter the booking reference from your confirmation to look up or "
+                "cancel your trip."
             )
-            with gr.Row():
-                health_button = gr.Button("Check health")
-                stats_button = gr.Button("Get statistics")
-            health_result = gr.JSON(label="Health")
-            stats_result = gr.JSON(label="Statistics")
-            health_button.click(_health, outputs=health_result)
-            stats_button.click(_stats, outputs=stats_result)
-
-            with gr.Row():
-                flight_id = gr.Textbox(label="Flight ID")
-                flight_button = gr.Button("Get flight seat counts")
-            flight_result = gr.JSON(label="Flight")
-            flight_button.click(_flight_counts, inputs=flight_id, outputs=flight_result)
-
-            with gr.Row():
-                offset = gr.Number(value=0, precision=0, minimum=0, label="Booking offset")
-                limit = gr.Number(value=100, precision=0, minimum=1, maximum=500, label="Page size")
-                export_button = gr.Button("Export bookings")
-            export_result = gr.JSON(label="Booking export")
-            export_button.click(
-                _booking_export,
-                inputs=[offset, limit],
-                outputs=export_result,
+            reference_lookup = gr.Textbox(
+                label="Booking reference",
+                placeholder="For example: b_...",
+            )
+            lookup_button = gr.Button("View booking")
+            lookup_message = gr.Markdown()
+            lookup_button.click(
+                _get_booking,
+                inputs=reference_lookup,
+                outputs=lookup_message,
             )
 
-            reset_confirm = gr.Checkbox(
-                label="I understand reset deletes every booking and hold",
-                value=False,
-            )
-            reset_button = gr.Button("Reset all bookings and holds", variant="stop")
-            reset_result = gr.JSON(label="Reset response")
-            reset_button.click(_reset, inputs=reset_confirm, outputs=reset_result)
-
-            restart_confirm = gr.Checkbox(
-                label="I understand this will restart the API process",
-                value=False,
-            )
-            restart_button = gr.Button("Restart airline service", variant="stop")
-            restart_result = gr.JSON(label="Restart response")
-            restart_button.click(
-                _restart,
-                inputs=restart_confirm,
-                outputs=restart_result,
+            gr.Markdown("#### Cancel a trip")
+            cancel_button = gr.Button("Cancel this booking", variant="stop")
+            cancel_message = gr.Markdown()
+            cancel_button.click(
+                _cancel_booking,
+                inputs=reference_lookup,
+                outputs=cancel_message,
             )
 
     return demo

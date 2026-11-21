@@ -17,7 +17,7 @@ import gradio as gr
 from .api import admin, bookings, health, holds, search
 from .api.common import ApiError, error_response
 from .db import create_pool, fetch_one, initialize_database
-from .ui import build_ui
+from .ui import USER_CSS, build_ui
 
 log = logging.getLogger("airline")
 RESTART_DOWNTIME_S = 30
@@ -149,4 +149,10 @@ app.include_router(search.router)
 app.include_router(holds.router)
 app.include_router(bookings.router)
 app.include_router(admin.router)
-app = gr.mount_gradio_app(app, build_ui(), path="/ui")
+app = gr.mount_gradio_app(
+    app,
+    build_ui(),
+    path="/ui",
+    css=USER_CSS,
+    footer_links=[],
+)
