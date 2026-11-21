@@ -36,6 +36,7 @@ services:
       AIRLINE_DB_PASSWORD: ${AIRLINE_DB_PASSWORD:-airline_dev_password}
       AIRLINE_DB_POOL_MIN: ${AIRLINE_DB_POOL_MIN:-4}
       AIRLINE_DB_POOL_MAX: ${AIRLINE_DB_POOL_MAX:-32}
+      AIRLINE_API_BASE_URL: http://127.0.0.1:8080
     depends_on:
       db:
         condition: service_healthy

@@ -25,6 +25,14 @@ Check that it is responding:
 curl.exe http://localhost:8080/health
 ```
 
+Open the browser interface at **http://localhost:8080/ui/**. The Search and
+book tab supports finding itineraries, creating holds, submitting bookings,
+and entering passenger names, payment tokens, and idempotency keys. Manage
+bookings supports lookup and cancellation. The Instructor / admin tab exposes
+health, statistics, flight seat counts, booking export, reset, and restart.
+The interface calls the same HTTP API as other clients; no separate account or
+API key is required.
+
 Run a grader test from the repository root in another terminal. This uses the
 CLI in the Docker image, so `uv` does not need to be installed on your host:
 
@@ -35,6 +43,18 @@ docker compose run --rm --no-deps --no-TTY airline flightcontrol test --url http
 Run tests 1 through 5 by changing `--test`. Stop the services with
 `docker compose down`. This keeps the database volume. To intentionally remove
 its data, use `docker compose down --volumes`.
+
+For a small independent HTTP-only check from the host, use Python's standard
+library; it does not import the airline or need `uv`:
+
+```powershell
+py -3 airline/verify_api.py --url http://localhost:8080 --reset
+```
+
+The verifier sends requests only to the API URL, including its 40-way hold and
+booking races. `--reset` is required because the check clears existing holds
+and bookings before and after running. Use it only against a disposable test
+instance.
 
 The local Compose configuration uses a development database password and binds
 the API to loopback. Before using it outside a trusted local machine, set a
