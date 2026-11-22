@@ -122,7 +122,7 @@ flowchart LR
     linkStyle 4,5 stroke:#c87500,stroke-width:2px
     linkStyle 6,7 stroke:#32804a,stroke-width:2px
     linkStyle 8 stroke:#7650a1,stroke-width:2px,stroke-dasharray:5 5
-    linkStyle 9,10,11 stroke:#626b75,stroke-width:1.5px,stroke-dasharray:5 5
+    
 ```
 
 
