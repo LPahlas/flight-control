@@ -76,6 +76,59 @@ internal database details under the database and persistent storage.
 This view is for readers who want the implementation-level boundaries and
 interactions.
 
+
+```mermaid
+flowchart LR
+    traveler["Traveler"]
+    subgraph airline["Airline Reservation Service"]
+        website["Booking Website"]
+        service["Reservation Service"]
+        database[("PostgreSQL<br/>Flights, holds, bookings")]
+        disk[("Persistent Database Files")]
+    end
+
+    
+
+    catalog["Packaged Flight Schedule<br/>(loaded during startup)"]
+    docker["Docker Restart Policy"]
+
+    traveler --> website
+    website --> service
+    service --> website
+    website --> traveler
+
+    service --> database
+    database --> service
+    catalog -.-> database
+    database --> disk
+    docker -.-> service
+
+    instructor -.-> grader
+    grader -.-> service
+    verifier -.-> service
+
+    classDef user fill:#e7f0ff,stroke:#2864a5,color:#142b45
+    classDef process fill:#fff0d9,stroke:#c87500,color:#422600
+    classDef data fill:#e5f4e8,stroke:#32804a,color:#16351f
+    classDef recovery fill:#f0e9fa,stroke:#7650a1,color:#2c1e42
+    classDef test fill:#f1f2f4,stroke:#626b75,color:#252a30
+
+    class traveler,website user
+    class service process
+    class database,disk,catalog data
+    class docker recovery
+    class instructor,grader,verifier test
+
+    linkStyle 0,1,2,3 stroke:#2864a5,stroke-width:2px
+    linkStyle 4,5 stroke:#c87500,stroke-width:2px
+    linkStyle 6,7 stroke:#32804a,stroke-width:2px
+    linkStyle 8 stroke:#7650a1,stroke-width:2px,stroke-dasharray:5 5
+    linkStyle 9,10,11 stroke:#626b75,stroke-width:1.5px,stroke-dasharray:5 5
+```
+
+
+
+
 ```mermaid
 flowchart LR
     traveler["End user<br/>Gradio browser UI"]
