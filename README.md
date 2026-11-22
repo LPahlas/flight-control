@@ -49,11 +49,11 @@ catalog; this can take a little while. Wait until the `airline` service is
 healthy. PostgreSQL data is kept in a Docker volume, so it remains when the
 services stop and start again.
 
-## 4. Test Airline as user
+## 4. Test Airline as user & Extra Credit Dashboard
 
 Wait for the `airline` service status to show **healthy** and for the health
 request to return a response before continuing.
-### Option 1: Terminal (Powershell)
+
 Leave the first terminal running. Open a **second PowerShell terminal** and
 change its directory to the repository root:
 
@@ -68,7 +68,6 @@ Check that the airline API responds:
 curl.exe http://localhost:8080/health
 ```
 
-### Option 2: Browser 
 The API does not require an API key. The airline's traveler website is at
 [http://localhost:8080/ui/](http://localhost:8080/ui/). You can search for
 flights, hold seats, confirm a booking with a demo payment, and look up or
