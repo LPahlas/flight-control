@@ -7,7 +7,7 @@ against the catalog, and keeps its own record of every booking it was told
 about so it can audit you afterwards.
 
 Run Flight Control on your own computer against your airline server at
-`localhost`. You do not need a public URL or a tunnel. T
+`localhost`. You do not need a public URL or a tunnel.
 
 How you build the system behind the API is up to you. That includes which
 database holds what, how you index it and how you keep it correct under load.
