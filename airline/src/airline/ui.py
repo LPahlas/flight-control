@@ -2,23 +2,80 @@ from __future__ import annotations
 
 import os
 import uuid
+from datetime import date
 from urllib.parse import quote
 
 import gradio as gr
 import httpx
 
-from flightcontrol.catalog import AIRPORT_BY_CODE
+from flightcontrol import catalog
 
 API_BASE_URL = os.environ.get("AIRLINE_API_BASE_URL", "http://127.0.0.1:8080").rstrip("/")
 
 USER_CSS = """
-:root { --body-background-fill: #f4f1ea; --block-background-fill: #fffdf8; --block-border-color: #ddd5c6; --body-text-color: #1d232b; --color-accent: #c76a00; }
-.gradio-container { max-width: 1120px !important; margin: auto; font-family: "IBM Plex Sans", system-ui, sans-serif; background: #f4f1ea; }
-.gradio-container .prose { color: #1d232b; }
-.block { border-radius: 12px !important; }
-label span, .wrap label { color: #5d6672 !important; }
-button.primary { background: #c76a00 !important; border-color: #c76a00 !important; color: #1b1203 !important; }
-button.stop { background: #fffdf8 !important; border: 1px solid #b3261e !important; color: #b3261e !important; }
+:root {
+  color-scheme: light;
+  --body-background-fill: #f4f1ea;
+  --body-text-color: #1d232b;
+  --block-background-fill: #fffdf8;
+  --block-border-color: #ddd5c6;
+  --input-background-fill: #fffdf8;
+  --input-border-color: #cfc5b2;
+  --color-accent: #c76a00;
+}
+html, body, #root, gradio-app, .gradio-container {
+  background-color: #f4f1ea !important;
+  color: #1d232b !important;
+}
+.gradio-container {
+  max-width: 1120px !important;
+  margin: auto;
+  font-family: "IBM Plex Sans", system-ui, sans-serif;
+}
+.gradio-container .prose, .gradio-container .prose * {
+  color: #1d232b !important;
+}
+.gradio-container .block, .gradio-container .form, .gradio-container .tabitem {
+  background-color: #fffdf8 !important;
+  color: #1d232b !important;
+  border-color: #ddd5c6 !important;
+  border-radius: 12px !important;
+}
+.gradio-container label, .gradio-container label span {
+  color: #38424d !important;
+}
+.gradio-container span, .gradio-container .info-text {
+  color: #38424d !important;
+}
+.gradio-container .wrap, .gradio-container .wrap-inner,
+.gradio-container .secondary-wrap {
+  background-color: #fffdf8 !important;
+  color: #1d232b !important;
+}
+.gradio-container input:not([type="checkbox"]):not([type="radio"]),
+.gradio-container textarea, .gradio-container select,
+.gradio-container [role="combobox"] {
+  background-color: #fffdf8 !important;
+  color: #1d232b !important;
+  border-color: #cfc5b2 !important;
+}
+.gradio-container button:not(.primary) {
+  background-color: #fffdf8 !important;
+  color: #1d232b !important;
+  border: 1px solid #cfc5b2 !important;
+  border-color: #cfc5b2 !important;
+  border-radius: 8px !important;
+}
+.gradio-container button.primary {
+  background: #c76a00 !important;
+  border-color: #c76a00 !important;
+  color: #1b1203 !important;
+}
+.gradio-container button.stop {
+  background: #fffdf8 !important;
+  border: 1px solid #b3261e !important;
+  color: #b3261e !important;
+}
 footer { display: none !important; }
 """
 
@@ -40,6 +97,8 @@ async def _api_request(
         body = response.json()
     except ValueError:
         body = {"error": "invalid_response", "detail": response.text[:1000]}
+    if not isinstance(body, dict):
+        body = {"error": "invalid_response", "detail": "The service returned an unexpected response."}
     return {"status_code": response.status_code, "body": body}
 
 
@@ -52,18 +111,56 @@ def _integer(value: int | float | None, label: str, minimum: int, maximum: int) 
     return int(number)
 
 
+def _validate_travel_date(value: str | None) -> str | None:
+    if not isinstance(value, str) or not value:
+        return "Choose a travel date."
+    try:
+        parsed = date.fromisoformat(value)
+    except ValueError:
+        return "Choose a valid date."
+    if parsed.isoformat() != value:
+        return "Choose a valid date."
+    if parsed.year != catalog.YEAR:
+        return f"Flights are currently scheduled for {catalog.YEAR}. Choose a date in that year."
+    return None
+
+
+def _service_error(response: dict, fallback: str) -> str:
+    if response.get("error"):
+        return "We could not reach the reservation service. Please try again."
+    status_code = response.get("status_code", 500)
+    if status_code >= 500:
+        return "The reservation service is temporarily unavailable. Please try again."
+    body = response.get("body")
+    if isinstance(body, dict):
+        detail = body.get("detail")
+        if detail:
+            return str(detail)
+        error = body.get("error")
+        if error:
+            return str(error).replace("_", " ")
+    return fallback
+
+
 async def _search(
     origin: str,
     destination: str,
     travel_date: str,
     passengers: int | float,
-) -> tuple[str, list[str], dict[str, str]]:
+) -> tuple[str, dict, dict[str, str]]:
     try:
         party_size = _integer(passengers, "Passengers", 1, 9)
     except ValueError as exc:
-        return f"Please check your trip details: {exc}", [], {}
+        return (
+            f"Please check your trip details: {exc}",
+            gr.update(choices=[], value=None),
+            {},
+        )
     if origin == destination:
-        return "Choose two different airports.", [], {}
+        return "Choose two different airports.", gr.update(choices=[], value=None), {}
+    date_error = _validate_travel_date(travel_date)
+    if date_error:
+        return date_error, gr.update(choices=[], value=None), {}
 
     response = await _api_request(
         "GET",
@@ -75,27 +172,50 @@ async def _search(
             "passengers": party_size,
         },
     )
-    if response["status_code"] != 200:
-        body = response.get("body", {})
-        message = body.get("detail") or body.get("error") or "We could not search for flights."
-        return str(message), [], {}
+    if response.get("status_code") != 200:
+        return (
+            _service_error(response, "We could not search for flights."),
+            gr.update(choices=[], value=None),
+            {},
+        )
 
-    itineraries = response.get("body", {}).get("itineraries", [])
+    itineraries = response["body"].get("itineraries", [])
     if not itineraries:
-        return "No flights are available for that trip.", [], {}
+        return (
+            "No flights are available for this trip. Try another date or route.",
+            gr.update(choices=[], value=None),
+            {},
+        )
 
+    flight_catalog = catalog.get().by_id
     choices: list[str] = []
     itinerary_map: dict[str, str] = {}
-    for item in itineraries:
+    for option_number, item in enumerate(itineraries, start=1):
+        legs = [flight_catalog[flight_id] for flight_id in item["flight_ids"]]
+        route = " → ".join(
+            [catalog.AIRPORT_BY_CODE[legs[0].origin].city]
+            + [catalog.AIRPORT_BY_CODE[leg.destination].city for leg in legs]
+        )
         stops = "Nonstop" if item["stops"] == 0 else f"{item['stops']} stop"
+        departure = legs[0].departure.astimezone(
+            catalog.AIRPORT_BY_CODE[legs[0].origin].zone
+        ).strftime("%b %d, %I:%M %p %Z")
+        arrival = legs[-1].arrival.astimezone(
+            catalog.AIRPORT_BY_CODE[legs[-1].destination].zone
+        ).strftime("%b %d, %I:%M %p %Z")
         label = (
-            f"{stops}  |  "
-            f"${item['price_cents'] / 100:.2f} per traveler  |  "
-            f"{item['seats_available']} seats left"
+            f"Option {option_number} · {route} · {stops} · "
+            f"Departs {departure} · Arrives {arrival} · "
+            f"${item['price_cents'] / 100:.2f} per traveler · "
+            f"{item['seats_available']} seats available"
         )
         choices.append(label)
         itinerary_map[label] = item["itinerary_id"]
-    return f"Found {len(choices)} option{'s' if len(choices) != 1 else ''}.", choices, itinerary_map
+    return (
+        f"Found {len(choices)} flight options.",
+        gr.update(choices=choices, value=choices[0], interactive=True),
+        itinerary_map,
+    )
 
 
 async def _create_hold(itinerary_id: str, passengers: int | float) -> tuple[str, str]:
@@ -113,8 +233,9 @@ async def _create_hold(itinerary_id: str, passengers: int | float) -> tuple[str,
     )
     body = response.get("body", {})
     if response.get("status_code") != 201:
-        message = body.get("detail") or body.get("error") or "Those seats could not be held."
-        if body.get("error") == "sold_out":
+        error = body.get("error")
+        message = _service_error(response, "Those seats could not be held.")
+        if error == "sold_out":
             message = "That option just sold out. Please search again."
         return str(message), ""
 
@@ -165,12 +286,13 @@ async def _create_booking(
     )
     body = response.get("body", {})
     if response.get("status_code") not in (200, 201):
-        message = body.get("detail") or body.get("error") or "The booking could not be completed."
-        if body.get("error") == "payment_declined":
+        error = body.get("error")
+        message = _service_error(response, "The booking could not be completed.")
+        if error == "payment_declined":
             message = "The demo payment was declined. Try the successful demo payment."
-        elif body.get("error") == "hold_expired":
+        elif error == "hold_expired":
             message = "The seat hold has expired. Search and hold the seats again."
-        elif body.get("error") == "passenger_mismatch":
+        elif error == "passenger_mismatch":
             message = "Enter one passenger name for each seat you held."
         return str(message), ""
 
@@ -187,8 +309,10 @@ async def _get_booking(booking_id: str) -> str:
     if not booking_id.strip():
         return "Enter your booking reference."
     response = await _api_request("GET", f"/bookings/{quote(booking_id.strip(), safe='')}")
-    if response["status_code"] == 404:
-        return "We could not find that booking reference."
+    if response.get("status_code") != 200:
+        if response.get("status_code") == 404:
+            return "We could not find that booking reference."
+        return _service_error(response, "We could not look up that booking.")
     body = response["body"]
     names = ", ".join(passenger["name"] for passenger in body["passengers"])
     status = "Confirmed" if body["status"] == "confirmed" else "Cancelled"
@@ -207,8 +331,10 @@ async def _cancel_booking(booking_id: str) -> str:
     response = await _api_request(
         "DELETE", f"/bookings/{quote(booking_id.strip(), safe='')}"
     )
-    if response["status_code"] == 404:
-        return "We could not find that booking reference."
+    if response.get("status_code") != 200:
+        if response.get("status_code") == 404:
+            return "We could not find that booking reference."
+        return _service_error(response, "We could not cancel that booking.")
     body = response["body"]
     return (
         f"Booking {body['booking_id']} is cancelled. "
@@ -219,15 +345,17 @@ async def _cancel_booking(booking_id: str) -> str:
 def build_ui() -> gr.Blocks:
     airport_choices = [
         (f"{airport.city} ({airport.code})", airport.code)
-        for airport in AIRPORT_BY_CODE.values()
+        for airport in catalog.AIRPORT_BY_CODE.values()
     ]
-    with gr.Blocks(title="Northwind Air") as demo:
+    with gr.Blocks(
+        title="Northwind Air",
+        theme=gr.themes.Soft(primary_hue="orange", neutral_hue="stone"),
+    ) as demo:
         gr.Markdown(
             "# Northwind Air\n"
             "### Find your next flight"
         )
         hold_id = gr.State("")
-        booking_id = gr.State("")
         itinerary_map = gr.State({})
 
         with gr.Tab("Book a trip"):
@@ -246,10 +374,12 @@ def build_ui() -> gr.Blocks:
                         interactive=True,
                     )
                 with gr.Row():
-                    travel_date = gr.Textbox(
+                    travel_date = gr.DateTime(
                         value="2027-05-04",
+                        include_time=False,
+                        type="string",
                         label="Travel date",
-                        placeholder="Use YYYY-MM-DD",
+                        info=f"Flights are currently scheduled for {catalog.YEAR}.",
                     )
                     passengers = gr.Number(
                         value=1,
@@ -304,10 +434,6 @@ def build_ui() -> gr.Blocks:
                 _create_booking,
                 inputs=[passenger_names, payment, hold_id],
                 outputs=[booking_message, booking_reference],
-            ).then(
-                lambda reference: reference,
-                inputs=booking_reference,
-                outputs=booking_id,
             )
 
         with gr.Tab("My booking"):

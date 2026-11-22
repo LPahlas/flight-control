@@ -1,5 +1,3 @@
-#!/usr/bin/env bash
-# Install or update Flight Control on a Linux server with Docker.
 #
 #   GH_TOKEN=<token with repo read> bash install.sh            # site + house airline
 #   bash install.sh --public-only                               # site only
