@@ -2,111 +2,84 @@
 
 ## System Overview
 
-This view shows the main people, processes, and database decisions without
-requiring the reader to know the project files or endpoint names.
+This high-level view shows the traveler-facing booking flow and the airline's
+database, schedule input, and persistence.
 
 ```mermaid
 flowchart LR
     traveler["Traveler"]
     subgraph airline["Airline Reservation Service"]
-        website["Booking Website"]
-        service["Reservation Service"]
+        website["Booking Website<br/>Gradio /ui"]
+        service["Reservation Service<br/>FastAPI"]
+        startup["Startup database initialization"]
         database[("PostgreSQL<br/>Flights, holds, bookings")]
-        disk[("Persistent Database Files")]
     end
-
-    subgraph testing["Separate: testing and instructor tools"]
-        instructor["Instructor Dashboard"]
-        grader["Flight Control Grader"]
-        verifier["Independent HTTP Verifier"]
-    end
-
-    catalog["Packaged Flight Schedule<br/>(loaded during startup)"]
-    docker["Docker Restart Policy"]
+    disk[("Persistent Database Files<br/>Docker volume: airlinedata")]
+    catalog["Packaged Flight Schedule<br/>flightcontrol.catalog"]
+    compose["compose.yaml<br/>restart: unless-stopped"]
+    docker["Docker Engine"]
 
     traveler --> website
-    website --> service
+    website --> service 
     service --> website
     website --> traveler
-
     service --> database
     database --> service
-    catalog -.-> database
-    database --> disk
-    docker -.-> service
-
-    instructor -.-> grader
-    grader -.-> service
-    verifier -.-> service
+    catalog -.-> startup
+    startup --> database
+    database <--> disk
+    compose --> docker
+    docker -.->|"restarts airline container"| service
+    docker -.->|"restarts database container"| database
 
     classDef user fill:#e7f0ff,stroke:#2864a5,color:#142b45
     classDef process fill:#fff0d9,stroke:#c87500,color:#422600
     classDef data fill:#e5f4e8,stroke:#32804a,color:#16351f
     classDef recovery fill:#f0e9fa,stroke:#7650a1,color:#2c1e42
-    classDef test fill:#f1f2f4,stroke:#626b75,color:#252a30
 
-    class traveler,website user
-    class service process
+    class traveler user
+    class website,service,startup process
     class database,disk,catalog data
-    class docker recovery
-    class instructor,grader,verifier test
-
-    linkStyle 0,1,2,3 stroke:#2864a5,stroke-width:2px
-    linkStyle 4,5 stroke:#c87500,stroke-width:2px
-    linkStyle 6,7 stroke:#32804a,stroke-width:2px
-    linkStyle 8 stroke:#7650a1,stroke-width:2px,stroke-dasharray:5 5
-    linkStyle 9,10,11 stroke:#626b75,stroke-width:1.5px,stroke-dasharray:5 5
+    class compose,docker recovery
 ```
 
 ### Diagram key
 
-- **Blue — traveler actions:** Search, hold seats, book, and cancel.
-- **Orange — reservation decisions:** The service checks available seats and processes reservations.
-- **Green — stored data:** PostgreSQL records and the persistent files that retain them.
-- **Purple — recovery:** Docker restarts the airline service after its process exits; the database storage remains.
-- **Gray dashed — testing and instruction:** These tools call the service separately from the traveler's website. The instructor dashboard can start and review grader runs.
+- **Blue — traveler:** The person using the booking website.
+- **Orange — application processes:** The website handlers, reservation API,
+  and startup initialization.
+- **Green — data:** The schedule, PostgreSQL records, and persistent database
+  files.
+- **Purple — container management:** Compose configures restart policies;
+  Docker applies them to the airline and database containers.
 
-The flight schedule is supporting input loaded into PostgreSQL when the service
-starts. It is not part of the traveler's booking flow. PostgreSQL uses its
-write-ahead log when committing changes; the high-level view groups those
-internal database details under the database and persistent storage.
+## Appendix: Reservation Flow
 
-## Appendix: Detailed Data Flow
-
-This view is for readers who want the implementation-level boundaries and
-interactions.
+This implementation-level view follows a booking request through the airline
+application to PostgreSQL and persistent storage.
 
 ```mermaid
 flowchart LR
-    traveler["End user<br/>Gradio browser UI"]
-    grader["Flight Control grader<br/>Test 1 through Test 5"]
-    verifier["Host HTTP verifier<br/>Standard library only"]
-    dashboard["Optional instructor dashboard<br/>web + engine"]
+    traveler["Traveler<br/>Browser UI"]
 
-    subgraph app["Docker application container"]
+    subgraph app["Airline application container"]
         gradio["Gradio mount<br/>/ui"]
         fastapi["FastAPI API"]
         catalog["Catalog and itinerary logic"]
         locking["Reservation transactions<br/>and seat availability"]
     end
 
-    subgraph dbcontainer["Docker database container"]
+    subgraph dbcontainer["PostgreSQL database container"]
         postgres[("PostgreSQL 17")]
         wal["Write-ahead log<br/>and database pages"]
     end
 
     volume[("Named volume<br/>airlinedata")]
-    restart["Docker restart policy"]
 
     traveler -->|"Trip and booking actions"| gradio
-    gradio -->|"HTTP API requests"| fastapi
+    gradio -->|"Internal HTTP API requests"| fastapi
     fastapi -->|"Booking results"| gradio
     gradio -->|"Confirmation or cancellation result"| traveler
-
-    grader -->|"Automated test requests"| fastapi
-    verifier -->|"Independent HTTP checks and races"| fastapi
-    dashboard -.->|"Start and review test runs"| grader
-
     fastapi -->|"Search and itinerary rules"| catalog
     catalog -->|"Flight and itinerary data"| fastapi
     fastapi -->|"Hold and booking operations"| locking
@@ -115,24 +88,134 @@ flowchart LR
     locking -->|"Result"| fastapi
     postgres -->|"Durable commits"| wal
     wal -->|"Persistent files"| volume
-    restart -.->|"Restart after process exit"| fastapi
 ```
 
 ### Database contents
 
 - **Flights:** Schedule, route, capacity, and fare information.
-- **Holds:** Temporary reservations and expiration times.
-- **Hold legs:** The flights reserved by each hold.
-- **Bookings:** Confirmed and cancelled purchases and passenger information.
-- **Booking legs:** The flights included in each booking.
-- **Request records:** Booking request keys and saved replies, used to safely handle retries.
+- **Holds and hold legs:** Temporary reservations, expiration times, and the flights reserved by each hold.
+- **Bookings and booking legs:** Confirmed or cancelled purchases, passenger information, and the flights in each booking.
+- **Request records:** Booking request keys and saved replies, used to handle retries safely.
 - **Service state:** Restart timing information.
 
 ### Reservation flow
 
-1. The website, grader, or independent verifier sends an HTTP request to the airline service.
+1. The traveler uses the website, which sends the booking request to the airline service.
 2. For a hold or booking, the service opens a database transaction and locks the relevant flight rows in a consistent order.
-3. PostgreSQL calculates seats already sold and seats still held. The service only proceeds if all legs have enough capacity.
+3. PostgreSQL calculates seats already sold and seats still held. The service proceeds only if all itinerary legs have enough capacity.
 4. The service writes all legs and the hold or booking status in the same transaction. PostgreSQL commits the full change or rolls it all back.
-5. The service returns a result over HTTP. The grader and independent verifier test through this same outside interface; they do not inspect application internals.
-6. On an application-process failure, Docker restarts the service. PostgreSQL and its persistent volume are separate, so committed booking data remains.
+5. The service returns the result through the website to the traveler.
+6. If the airline process exits, Docker may restart its container according to the policy configured in Compose. PostgreSQL and its persistent volume are separate, so committed booking data remains.
+
+## New DFD: Physical and Digital Elements
+
+### Updated diagram
+
+The diagram shows the traveler-facing browser, the airline application
+container, PostgreSQL, persistent database storage, and the startup and
+container-restart inputs. The airline application serves both the Gradio
+booking interface and the FastAPI reservation API.
+
+```mermaid
+flowchart LR
+    traveler["Traveler<br/>Human user"]
+    browser["Web browser<br/>Gradio frontend at /ui"]
+
+    subgraph airline["Airline application container<br/>Compose service: airline"]
+        ui["Gradio UI handlers"]
+        api["FastAPI API<br/>Reservation logic"]
+        startup["FastAPI startup initialization<br/>initialize_database() / seed_catalog()"]
+        catalog["Packaged schedule generator<br/>flightcontrol.catalog<br/>year 2027, seed 4340"]
+    end
+
+    subgraph postgres_service["PostgreSQL container<br/>Compose service: db"]
+        database[("PostgreSQL 17<br/>flights, holds, bookings,<br/>passengers, request records")]
+    end
+
+    volume[("Docker named volume<br/>airlinedata<br/>persistent database files")]
+    compose["compose.yaml<br/>restart: unless-stopped<br/>airline and db services"]
+    docker["Docker Engine<br/>applies restart policies to containers"]
+
+    traveler -->|"uses"| browser
+    browser -->|"Gradio UI events over HTTP"| ui
+    ui -->|"internal HTTP requests to 127.0.0.1:8080"| api
+    api -->|"SQL reads and transactions"| database
+    database -->|"query results"| api
+    api -->|"UI operation results"| ui
+    ui -->|"renders results"| browser
+
+    catalog -->|"catalog.get() during startup"| startup
+    startup -->|"creates schema; seeds schedule into flights table if empty"| database
+
+    database <-->|"PostgreSQL data directory<br/>/var/lib/postgresql/data"| volume
+
+    compose -->|"sets policy on airline and db containers"| docker
+    docker -.->|"restarts exited airline container"| airline
+    docker -.->|"restarts exited PostgreSQL container"| postgres_service
+
+    classDef person fill:#e7f0ff,stroke:#2864a5,color:#142b45
+    classDef frontend fill:#dceeff,stroke:#2864a5,color:#142b45
+    classDef backend fill:#fff0d9,stroke:#c87500,color:#422600
+    classDef dbElement fill:#e5f4e8,stroke:#32804a,color:#16351f
+    classDef storage fill:#def4f0,stroke:#258074,color:#123b36
+    classDef packaged fill:#f0e9fa,stroke:#7650a1,color:#2c1e42
+    classDef operations fill:#f1f2f4,stroke:#626b75,color:#252a30
+
+    class traveler person
+    class browser frontend
+    class ui,api,startup backend
+    class database dbElement
+    class volume storage
+    class catalog packaged
+    class compose,docker operations
+
+    style airline fill:#fffaf0,stroke:#c87500,stroke-width:1px
+    style postgres_service fill:#f4fbf5,stroke:#32804a,stroke-width:1px
+```
+
+### Legend
+
+| Color / element | Type | Meaning |
+|---|---|---|
+| Light blue person | Human user | The traveler using the service |
+| Blue browser | Web browser / frontend | The Gradio interface displayed at `/ui` |
+| Orange process | Digital backend | Gradio server handlers, FastAPI routes, and startup initialization |
+| Green cylinder | Database | PostgreSQL tables used by the airline |
+| Teal cylinder | Database storage | The Docker-managed `airlinedata` volume mounted to PostgreSQL's data directory; its files persist on the host |
+| Purple component | Packaged digital input | The deterministic catalog generator included with the application |
+| Gray component | Deployment configuration/runtime | Compose configuration and the Docker Engine that applies restart policies |
+
+Solid arrows show user, application, or data flow. Dashed arrows show
+container-management behavior.
+
+### Schedule and database startup
+
+The flight schedule is generated by the packaged Python module
+`flightcontrol.catalog` in `src/flightcontrol/catalog.py` for year 2027 with
+fixed seed `4340`; it is not read from an external website or a separately
+mounted schedule file. During FastAPI startup, `initialize_database()` creates
+the schema and calls `seed_catalog()`. `seed_catalog()` calls `catalog.get()`
+and copies the generated flight rows into PostgreSQL's `flights` table only
+when that table is empty.
+
+### Restart policy and persistent database storage
+
+The `restart: unless-stopped` settings come from `compose.yaml` and are
+configured on both the `airline` and `db` services. Docker applies each policy
+to its corresponding container: it can restart the airline container if that
+container exits, and it can restart the PostgreSQL container if that container
+exits.
+
+The restart policy acts on containers, not on the database rows or files
+themselves. The PostgreSQL container stores its data directory at
+`/var/lib/postgresql/data`, which Compose mounts from the named `airlinedata`
+volume. That volume preserves committed database files across container
+restarts. Restarting the airline container does not itself restart PostgreSQL
+or erase the volume.
+
+### Reservation data
+
+PostgreSQL stores the flight catalog, active and completed holds, hold legs,
+bookings, booking legs, passenger information, idempotency records, and
+service state. Reservation changes use database transactions and row locks so
+that a multi-flight hold or booking is committed in full or not at all.
