@@ -73,6 +73,8 @@ The API does not require an API key. The airline's traveler website is at
 flights, hold seats, confirm a booking with a demo payment, and look up or
 cancel a booking using its reference.
 
+The website at "http://localhost:8080/ui/" is the extra credit frontend
+
 ## 5. Run the project test suite
 
 In the second terminal, still at the repository root, run the automated
