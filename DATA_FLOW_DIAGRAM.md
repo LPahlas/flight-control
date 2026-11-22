@@ -103,9 +103,7 @@ flowchart LR
     database --> disk
     docker -.-> service
 
-    instructor -.-> grader
-    grader -.-> service
-    verifier -.-> service
+    
 
     classDef user fill:#e7f0ff,stroke:#2864a5,color:#142b45
     classDef process fill:#fff0d9,stroke:#c87500,color:#422600
