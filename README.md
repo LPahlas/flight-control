@@ -123,18 +123,7 @@ grader tests against a development database whose data can be reset. Test 4
 restarts the airline; Docker Compose starts it again automatically. Tests can
 take several minutes to finish.
 
-## 7. Start the Flight Control home page (optional)
 
-To open Flight Control's local home page, use a **third PowerShell terminal**
-and run:
-
-```powershell
-Set-Location "$HOME\Documents\flight-control"
-uv run flightcontrol web
-```
-
-Then open [http://localhost:8000/](http://localhost:8000/) in a browser. This
-is a local URL; the project does not set up a public website.
 
 ## Stop the services
 
