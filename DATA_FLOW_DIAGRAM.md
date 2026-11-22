@@ -71,10 +71,9 @@ starts. It is not part of the traveler's booking flow. PostgreSQL uses its
 write-ahead log when committing changes; the high-level view groups those
 internal database details under the database and persistent storage.
 
-## Appendix: Detailed Data Flow
 
-This view is for readers who want the implementation-level boundaries and
-interactions.
+
+### New temp DFD for the paper
 
 
 
@@ -124,6 +123,30 @@ flowchart LR
     linkStyle 8 stroke:#7650a1,stroke-width:2px,stroke-dasharray:5 5
     
 ```
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+## Appendix: Detailed Data Flow
+
+This view is for readers who want the implementation-level boundaries and
+interactions.
+
+
+
 
 
 ```mermaid
